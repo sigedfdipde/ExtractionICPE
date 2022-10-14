@@ -1,0 +1,211 @@
+<html>
+  <head>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.8.0/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.8.0/dist/leaflet.js"></script>
+    <title>Rechercher les ICPE autour d'un emplacement</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    <style>
+      #map { height: 500px; }
+    </style>
+  </head>
+  
+  <body>
+    <div id="app">
+      <h1 class="title">Rechercher les ICPE autour d'un emplacement <a class="subtitle" href="https://api.gouv.fr/documentation/api-georisques">(requête temps réél API GEORISQUE)</a></h1>
+      <div class="columns">
+        <div id="form" class="column is-one-third">
+          <h2 class="subtitle">Recherche</h2><br>
+          Longitude: <input class="input" type="number" v-model="lng" />
+          Latitude: <input class="input" type="number" v-model="lat"/>
+          <button class="button"   @click="setMarker()">Visualiser</button>
+          <button class="button"   @click="getXY()">Obtenir XY via clic sur la carte</button><br>
+          Distance (km): <input class="input is-narrow" type="number" v-model="dist" />
+          <button class="button is-info" @click="rechercher()" :class="{'is-loading':loading}" >Rechercher les ICPE</button>
+        </div>
+        <div id="carte" class="column">
+          <h2 class="subtitle">Carte</h2>
+          <div id="map"></div>
+        </div>
+      </div>
+      
+      <div id="Res">
+        <h2 class="subtitle">Résultats</h2>
+        <p class="notification  is-danger" v-if="oversize">Attention, plus de 100 résultats trouvés. Seuls les 100 premiers résultats sont affichés.</p>
+        <button v-if="res.length>0" class="button is-light" @click="exportcsv()">Export CSV</button>
+        <table class="table">
+          <thead>
+            <tr>
+              <td>Lon</td>
+              <td>Lat</td>
+              <td>Raison sociale</td>
+              <td>Commune</td>
+              <td>Activités</td>
+              <td>Seveso</td>
+              <td>Régime</td>
+              <td>Etat</td>
+              <td>Action</td>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="icpe,id in res" :key="id">
+              <td>{{icpe.longitude}}</td>
+              <td>{{icpe.latitude}}</td>
+              <td>{{icpe.raisonSociale}}</td>
+              <td>{{icpe.commune}}</td>
+              <td>{{icpe.activites}}</td>
+              <td>{{icpe.seveso}}</td>
+              <td>{{icpe.regimeVigueur}}</td>
+              <td>{{icpe.etatActivite}}</td>
+              <td @click="localiser(icpe)">Localiser</td>
+              
+            </tr>
+          </tbody>
+        </table>
+        <br>
+      </div>
+      @RIVIERE Romain, 2022
+    </div>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.1.min.js"></script>
+<script>
+const { createApp } = Vue
+
+createApp({
+  data() {
+    return {
+      lng: null,
+      lat: null,
+      dist: 10,
+      map: null,
+      res: [],
+      data: [],
+      marker: new L.marker([0,0]),
+      selectMarker: new L.marker([0,0]),
+      oversize: false,
+      activites: ["bovins","porcs","volailles","carriere","eolienne","industrie"],
+      loading:false,
+      layer: null
+    }
+  },
+  mounted(){
+    this.map = L.map('map').setView([46.23, 2.3265], 5);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap'
+    }).addTo(this.map);
+    this.marker.addTo(this.map);
+    this.selectMarker.addTo(this.map);
+    this.layer = L.geoJSON(null);
+    this.layer.bindPopup(function (layer) {
+        return layer.feature.properties.raisonSociale;
+    });
+    this.layer.addTo(this.map);
+  },
+  methods:{
+    getXY(){
+      this.map.on('click',this._getXY);
+    },
+    _getXY(e){
+      this.lat=e.latlng.lat.toFixed(5);
+      this.lng=e.latlng.lng.toFixed(5);
+      this.map.off('click',this._getXY);
+      this.setMarker(false);
+    },
+    setMarker(pan=true){
+      if(this.lat&&this.lng){
+        this.marker.setLatLng(L.latLng(this.lat,this.lng));
+        if(pan){this.map.panTo(L.latLng(this.lat,this.lng));} 
+      }
+    },
+    getActivites(icpe){
+      var res = [];
+      for(a of this.activites){
+        if(icpe[a]){
+          res.push(a);
+        }
+      }
+      return res.join(', ')
+    },
+    exportcsv(){
+      let csvContent = "data:text/csv;charset=utf-8,";
+      csvContent += Object.keys(this.res[0]).join(";") + "\r\n";
+      this.res.forEach(function(v) {
+          let row = Object.values(v).join(";");
+          csvContent += row + "\r\n";
+      });
+      var encodedUri = encodeURI(csvContent);
+      var link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", "ExportICPE.csv");
+      document.body.appendChild(link); // Required for FF
+      link.click();
+    },
+    localiser(icpe){
+      this.selectMarker.unbindPopup();
+      this.map.panTo([icpe.latitude,icpe.longitude]);
+      this.selectMarker.setLatLng(L.latLng(this.lat,this.lng)).bindPopup(icpe.raisonSociale).openPopup();
+      document.getElementById('map').scrollIntoView();
+    },
+    afficherCarte(){
+      this.layer.clearLayers();
+      var geojson = {
+        "type": "FeatureCollection",
+        "features": []
+      };
+      
+      for(row of this.res){
+        geojson.features.push({
+          "type": "Feature",
+          "properties": row,
+          "geometry": {
+              "type": "Point",
+              "coordinates": [ row.longitude,row.latitude]
+          }
+      });
+      }
+      this.layer.addData(geojson);
+      this.layer.setStyle(function (feature) {
+            return {color: '#FFA500'};
+        });
+      if(this.res.length>0){this.map.fitBounds(this.layer.getBounds())};
+    },
+    rechercher(){
+      if(!this.lat||!this.lng||!this.dist){
+        alert("Saisir Lon/Lat/Distance")
+        return
+      }
+      this.setMarker();
+      //query API
+      this.oversize=false;
+      this.loading=true;
+      $.get('https://www.georisques.gouv.fr/api/v1/installations_classees?latlon='+this.lng+','+this.lat+'&page_size=100&rayon='+this.dist*1000,(data)=>{
+        if(data.results>100){
+          this.oversize=true;
+        }
+        this.data=data;
+        this.res=data.data.map((x)=>{
+          
+          return {
+            longitude: x.longitude,
+            latitude: x.latitude,
+            raisonSociale: x.raisonSociale,
+            commune: x.commune,
+            activites: this.getActivites(x),
+            seveso: "statutSeveso" in x?x.statutSeveso:null ,
+            regimeVigueur: x.regimeVigueur,
+            etatActivite: x.etatActivite
+          }
+      });
+      document.getElementById('Res').scrollIntoView();
+      this.afficherCarte();
+      this.loading=false;
+      }).fail(function(){ 
+        alert("Erreur lors de la requete de l'API Géorisque - pas de réponse")
+        this.loading=false;
+      });
+    }
+  }
+}).mount('#app')
+</script>
+  </body>
+</html>
